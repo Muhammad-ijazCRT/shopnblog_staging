@@ -2,25 +2,27 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Http\Request;
-use App\Models\Products;
-use App\Models\Purchases;
+use DB;
+use App\Helper;
 use App\Models\User;
+use App\Models\Reports;
+use App\Models\Products;
+use App\Models\TaxRates;
+use App\Models\Purchases;
+use Illuminate\Http\File;
+use App\Models\Withdrawals;
+use Illuminate\Http\Request;
+use App\Models\AdminSettings;
 use App\Models\MediaProducts;
 use App\Models\Notifications;
-use App\Models\AdminSettings;
 use App\Models\ShopCategories;
-use App\Models\TaxRates;
-use App\Models\Withdrawals;
-use App\Models\ReferralTransactions;
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Support\Facades\Storage;
 use App\Notifications\NewSale;
-use Illuminate\Http\File;
 use Illuminate\Validation\Rule;
-use App\Models\Reports;
-use App\Helper;
-use DB;
+use App\Models\ReferralTransactions;
+use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Redirect;
+use Illuminate\Support\Facades\Validator;
+use Srmklive\PayPal\Services\PayPal as PayPalClient;
 
 class ProductsController extends Controller
 {
@@ -28,512 +30,522 @@ class ProductsController extends Controller
 
   public function __construct(AdminSettings $settings, Request $request)
   {
-		$this->settings = $settings::first();
-		$this->request = $request;
-	}
+    $this->settings = $settings::first();
+    $this->request = $request;
+  }
 
- public function index()
- {
-   if (! $this->settings->shop) {
-     abort(404);
-   }
+  public function index()
+  {
+    if (!$this->settings->shop) {
+      abort(404);
+    }
 
-   $tags = request('tags');
-   $sort = request('sort');
-   $cat  = request('cat');
-   $category = null;
+    $tags = request('tags');
+    $sort = request('sort');
+    $cat  = request('cat');
+    $category = null;
 
-   $products = Products::with('seller:name,username,avatar')->whereStatus('1');
-   $categories = ShopCategories::orderBy('name')->get();
+    $products = Products::with('seller:name,username,avatar')->whereStatus('1');
+    $categories = ShopCategories::orderBy('name')->get();
 
-   if ($cat) {
-     $category = ShopCategories::whereSlug($cat)->firstOrFail();
-   }
+    if ($cat) {
+      $category = ShopCategories::whereSlug($cat)->firstOrFail();
+    }
 
-   // Filter by Category
-   $products->when($cat, function($q) use ($cat, $category) {
-     $q->where('category', $category->id);
-   });
+    // Filter by Category
+    $products->when($cat, function ($q) use ($cat, $category) {
+      $q->where('category', $category->id);
+    });
 
-   // Filter by tags
-   $products->when(strlen($tags) > 2, function($q) use ($tags) {
-     $q->where('tags', 'LIKE', '%'.$tags.'%');
-   });
+    // Filter by tags
+    $products->when(strlen($tags) > 2, function ($q) use ($tags) {
+      $q->where('tags', 'LIKE', '%' . $tags . '%');
+    });
 
-   // Filter by oldest
-   $products->when($sort == 'oldest', function($q) {
-     $q->orderBy('id', 'asc');
-   });
+    // Filter by oldest
+    $products->when($sort == 'oldest', function ($q) {
+      $q->orderBy('id', 'asc');
+    });
 
-   // Filter by lowest price
-   $products->when($sort == 'priceMin', function($q) {
-     $q->orderBy('price', 'asc');
-   });
+    // Filter by lowest price
+    $products->when($sort == 'priceMin', function ($q) {
+      $q->orderBy('price', 'asc');
+    });
 
-   // Filter by Highest price
-   $products->when($sort == 'priceMax', function($q) {
-     $q->orderBy('price', 'desc');
-   });
+    // Filter by Highest price
+    $products->when($sort == 'priceMax', function ($q) {
+      $q->orderBy('price', 'desc');
+    });
 
-   // Filter by Physical Products
-   $products->when($sort == 'physical', function($q) {
-     $q->where('type', 'physical');
-   });
+    // Filter by Physical Products
+    $products->when($sort == 'physical', function ($q) {
+      $q->where('type', 'physical');
+    });
 
-   // Filter by Digital Products
-   $products->when($sort == 'digital', function($q) {
-     $q->where('type', 'digital');
-   });
+    // Filter by Digital Products
+    $products->when($sort == 'digital', function ($q) {
+      $q->where('type', 'digital');
+    });
 
-   // Filter by Custom Content
-   $products->when($sort == 'custom', function($q) {
-     $q->where('type', 'custom');
-   });
+    // Filter by Custom Content
+    $products->when($sort == 'custom', function ($q) {
+      $q->where('type', 'custom');
+    });
 
-   $products = $products->orderBy('id', 'desc')
-   ->paginate(15);
+    $products = $products->orderBy('id', 'desc')
+      ->paginate(15);
 
-  return view('shop.products')->with([
-    'products' => $products,
-    'categories' => $categories,
-    'category' => $category ?? null
-  ]);
- }
+    return view('shop.products')->with([
+      'products' => $products,
+      'categories' => $categories,
+      'category' => $category ?? null
+    ]);
+  }
 
- public function createPhysicalProduct()
- {
-   if (auth()->check()
+  public function createPhysicalProduct()
+  {
+    if (
+      auth()->check()
       && auth()->user()->verified_id != 'yes'
-      || ! $this->settings->shop
-      || ! $this->settings->physical_products
+      || !$this->settings->shop
+      || !$this->settings->physical_products
     ) {
-     abort(404);
-   }
-
-   return view('shop.add-physical-product');
- }// End method createPhysicalProduct
-
- public function storePhysicalProduct()
- {
-     if($this->request->addmore){
-  $spacial=array();
-    foreach($this->request->addmore as $key => $value){
-     foreach($value as $keys => $values){
-      $spacial[$keys] =  $values;
-     }
-    }}
-    if($this->request->addmores){
-  $disable_sh=array();
-  $ii=1;
-    foreach($this->request->addmores as $value){
-      $disable_sh[$ii] =  $value;
-      $ii++;
+      abort(404);
     }
+
+    return view('shop.add-physical-product');
+  } // End method createPhysicalProduct
+
+  public function storePhysicalProduct()
+  {
+    if ($this->request->addmore) {
+      $spacial = array();
+      foreach ($this->request->addmore as $key => $value) {
+        foreach ($value as $keys => $values) {
+          $spacial[$keys] =  $values;
+        }
+      }
     }
-   $categories = ShopCategories::count();
-   $path = config('path.shop');
+    if ($this->request->addmores) {
+      $disable_sh = array();
+      $ii = 1;
+      foreach ($this->request->addmores as $value) {
+        $disable_sh[$ii] =  $value;
+        $ii++;
+      }
+    }
+    $categories = ShopCategories::count();
+    $path = config('path.shop');
 
-   // Currency Position
-   if ($this->settings->currency_position == 'right') {
-     $currencyPosition =  2;
-   } else {
-     $currencyPosition =  null;
-   }
+    // Currency Position
+    if ($this->settings->currency_position == 'right') {
+      $currencyPosition =  2;
+    } else {
+      $currencyPosition =  null;
+    }
 
-   $messages = [
-   'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
-   'tags.required' => trans('validation.required', ['attribute' => __('general.tags')]),
-   'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
-   'price.min' => trans('general.amount_minimum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-   'price.max' => trans('general.amount_maximum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-   'quantity.required' => trans('validation.required', ['attribute' => __('general.quantity')]),
-   'box_contents.required' => trans('validation.required', ['attribute' => __('general.box_contents')]),
-   'box_contents.max' => trans('validation.max', ['attribute' => __('general.box_contents')]),
-   'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
-   ];
+    $messages = [
+      'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
+      'tags.required' => trans('validation.required', ['attribute' => __('general.tags')]),
+      'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
+      'price.min' => trans('general.amount_minimum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'price.max' => trans('general.amount_maximum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'quantity.required' => trans('validation.required', ['attribute' => __('general.quantity')]),
+      'box_contents.required' => trans('validation.required', ['attribute' => __('general.box_contents')]),
+      'box_contents.max' => trans('validation.max', ['attribute' => __('general.box_contents')]),
+      'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
+    ];
 
-   // Media Files Preview
-   $fileuploaderPreview = $this->request->input('fileuploader-list-preview');
-   $fileuploaderPreview = json_decode($fileuploaderPreview, TRUE);
+    // Media Files Preview
+    $fileuploaderPreview = $this->request->input('fileuploader-list-preview');
+    $fileuploaderPreview = json_decode($fileuploaderPreview, TRUE);
 
-   if (! $fileuploaderPreview) {
-     return response()->json([
-         'success' => false,
-         'errors' => ['error' => __('general.image_preview_required')],
-     ]);
-   }
+    if (!$fileuploaderPreview) {
+      return response()->json([
+        'success' => false,
+        'errors' => ['error' => __('general.image_preview_required')],
+      ]);
+    }
 
-   $input = $this->request->all();
+    $input = $this->request->all();
 
-   $validator = Validator::make($input, [
-     'name'     => 'required|min:5|max:100',
-     'tags'     => 'required',
-     'category' => Rule::requiredIf($categories),
-     'description' => 'required|min:10',
-     'price'       => 'required|numeric|min:'.$this->settings->min_price_product.'|max:'.$this->settings->max_price_product,
-     'quantity' => 'required',
-     'box_contents' => 'required|max:100',
-   ], $messages);
+    $validator = Validator::make($input, [
+      'name'     => 'required|min:5|max:100',
+      'tags'     => 'required',
+      'category' => Rule::requiredIf($categories),
+      'description' => 'required|min:10',
+      'price'       => 'required|numeric|min:' . $this->settings->min_price_product . '|max:' . $this->settings->max_price_product,
+      'quantity' => 'required',
+      'box_contents' => 'required|max:100',
+    ], $messages);
 
     if ($validator->fails()) {
-         return response()->json([
-             'success' => false,
-             'errors' => $validator->getMessageBag()->toArray(),
-         ]);
-     } //<-- Validator
+      return response()->json([
+        'success' => false,
+        'errors' => $validator->getMessageBag()->toArray(),
+      ]);
+    } //<-- Validator
 
-     // Validate length tags
-     $tagsLength = explode(',', $this->request->tags);
+    // Validate length tags
+    $tagsLength = explode(',', $this->request->tags);
 
-     	foreach ($tagsLength as $tag) {
-     		if (strlen($tag) < 2) {
-          return response()->json([
-              'success' => false,
-              'errors' => ['error' => trans('general.error_length_tags')],
-          ]);
-     	}
+    foreach ($tagsLength as $tag) {
+      if (strlen($tag) < 2) {
+        return response()->json([
+          'success' => false,
+          'errors' => ['error' => trans('general.error_length_tags')],
+        ]);
+      }
     }
 
     // Validate price and shipping fee
     if ($this->request->shipping_fee >= $this->request->price) {
       return response()->json([
-          'success' => false,
-          'errors' => ['error' => __('general.error_price_shipping_fee')],
+        'success' => false,
+        'errors' => ['error' => __('general.error_price_shipping_fee')],
       ]);
     }
 
-     $product              = new Products();
-     $product->user_id     = auth()->id();
-     $product->name        = $this->request->name;
-     $product->type        = 'physical';
-     $product->price       = $this->request->price;
-     $product->shipping_fee = $this->request->shipping_fee;
-     $product->country_free_shipping = $this->request->shipping_fee ? $this->request->country_free_shipping : false;
-     $product->tags        = $this->request->tags;
-     $product->quantity     = $this->request->quantity;
-     $product->box_contents     = $this->request->box_contents;
-     $product->category     = $this->request->category;
-     $product->description = trim(Helper::checkTextDb($this->request->description));
-     $product->spacial_country_fees=($this->request->addmore)?json_encode($spacial):'';
-     $product->disable_shiping=($this->request->addmores)?json_encode($disable_sh):'';
-     $product->save();
+    $product              = new Products();
+    $product->user_id     = auth()->id();
+    $product->name        = $this->request->name;
+    $product->type        = 'physical';
+    $product->price       = $this->request->price;
+    $product->shipping_fee = $this->request->shipping_fee;
+    $product->country_free_shipping = $this->request->shipping_fee ? $this->request->country_free_shipping : false;
+    $product->tags        = $this->request->tags;
+    $product->quantity     = $this->request->quantity;
+    $product->box_contents     = $this->request->box_contents;
+    $product->category     = $this->request->category;
+    $product->description = trim(Helper::checkTextDb($this->request->description));
+    $product->spacial_country_fees = ($this->request->addmore) ? json_encode($spacial) : '';
+    $product->disable_shiping = ($this->request->addmores) ? json_encode($disable_sh) : '';
+    $product->save();
 
-     // Insert Images Preview
-     if ($fileuploaderPreview) {
-       foreach ($fileuploaderPreview as $key => $media) {
-         MediaProducts::create([
-           'products_id' => $product->id,
-           'name' => $media['file'],
-           'products_id' => $product->id
-         ]);
+    // Insert Images Preview
+    if ($fileuploaderPreview) {
+      foreach ($fileuploaderPreview as $key => $media) {
+        MediaProducts::create([
+          'products_id' => $product->id,
+          'name' => $media['file'],
+          'products_id' => $product->id
+        ]);
 
-         // Move file to Storage
-				 $this->moveFileStorage($media['file'], $path);
+        // Move file to Storage
+        $this->moveFileStorage($media['file'], $path);
+      }
+    } // Insert Images Previews
 
-       }
-     }// Insert Images Previews
+    return response()->json([
+      'success' => true,
+      'url' => url('shop/product', $product->id)
+    ]);
+  } // End method storePhysicalProduct
 
-     return response()->json([
-         'success' => true,
-         'url' => url('shop/product', $product->id)
-     ]);
-
- }// End method storePhysicalProduct
-
- public function create()
- {
-   if (auth()->check()
+  public function create()
+  {
+    if (
+      auth()->check()
       && auth()->user()->verified_id != 'yes'
-      || ! $this->settings->shop
-      || ! $this->settings->digital_product_sale
+      || !$this->settings->shop
+      || !$this->settings->digital_product_sale
     ) {
-     abort(404);
-   }
-
-   return view('shop.add-product');
- }// End method create
-
- public function store()
- {
-   $categories = ShopCategories::count();
-   $path = config('path.shop');
-
-   // Currency Position
-   if ($this->settings->currency_position == 'right') {
-     $currencyPosition =  2;
-   } else {
-     $currencyPosition =  null;
-   }
-
-   $messages = [
-   'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
-   'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
-   'price.min' => trans('general.amount_minimum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-   'price.max' => trans('general.amount_maximum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-   'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
-   ];
-
-   // Media Files Preview
-   $fileuploaderPreview = $this->request->input('fileuploader-list-preview');
-   $fileuploaderPreview = json_decode($fileuploaderPreview, TRUE);
-
-   // Media File
-   $fileuploaderFile = $this->request->input('fileuploader-list-file');
-   $fileuploaderFile = json_decode($fileuploaderFile, TRUE);
-
-   if (! $fileuploaderPreview) {
-     return response()->json([
-         'success' => false,
-         'errors' => ['error' => __('general.image_preview_required')],
-     ]);
-   }
-
-   if (! $fileuploaderFile) {
-     return response()->json([
-         'success' => false,
-         'errors' => ['error' => __('general.file_required')],
-     ]);
-   }
-
-   $input = $this->request->all();
-
-   $validator = Validator::make($input, [
-     'name'     => 'required|min:5|max:100',
-     'tags'     => 'required',
-     'category' => Rule::requiredIf($categories),
-     'description' => 'required|min:10',
-     'price'       => 'required|numeric|min:'.$this->settings->min_price_product.'|max:'.$this->settings->max_price_product,
-   ], $messages);
-
-    if ($validator->fails()) {
-         return response()->json([
-             'success' => false,
-             'errors' => $validator->getMessageBag()->toArray(),
-         ]);
-     } //<-- Validator
-
-     // Validate length tags
-     $tagsLength = explode(',', $this->request->tags);
-
-     	foreach ($tagsLength as $tag) {
-     		if (strlen($tag) < 2) {
-          return response()->json([
-              'success' => false,
-              'errors' => ['error' => trans('general.error_length_tags')],
-          ]);
-     	}
+      abort(404);
     }
 
-     $product              = new Products();
-     $product->user_id     = auth()->id();
-     $product->name        = $this->request->name;
-     $product->price       = $this->request->price;
-     $product->tags        = $this->request->tags;
-     $product->category    = $this->request->category;
-     $product->description = trim(Helper::checkTextDb($this->request->description));
-     $product->save();
+    return view('shop.add-product');
+  } // End method create
 
-     // Insert Images Preview
-     if ($fileuploaderPreview) {
-       foreach ($fileuploaderPreview as $key => $media) {
-         MediaProducts::create([
-           'products_id' => $product->id,
-           'name' => $media['file'],
-           'products_id' => $product->id
-         ]);
+  public function store()
+  {
+    $categories = ShopCategories::count();
+    $path = config('path.shop');
 
-         // Move file to Storage
-				 $this->moveFileStorage($media['file'], $path);
-
-       }
-     }// Insert Images Previews
-
-     // Update File
-     if ($fileuploaderFile) {
-
-       $local = 'temp/';
-
-       foreach ($fileuploaderFile as $key => $media) {
-
-         $uploaderfile = $media['file'];
-         $img = public_path($local.$uploaderfile);
-         $ext = explode('.', $uploaderfile);
-         $mime = mime_content_type($img);
-
-         Products::whereId($product->id)->update([
-           'file' => $media['file'],
-           'mime' => $mime,
-           'extension' => $ext[1],
-           'size' => Helper::formatBytes(filesize($img), 1)
-         ]);
-
-         // Move file to Storage
-				 $this->moveFileStorage($media['file'], $path);
-
-       }
-     }// Update File
-
-     return response()->json([
-         'success' => true,
-         'url' => url('shop/product', $product->id)
-     ]);
-
- }// End method store
-
- public function createCustomContent()
- {
-   if (auth()->check()
-      && auth()->user()->verified_id != 'yes'
-      || ! $this->settings->shop
-      || ! $this->settings->custom_content
-    ) {
-     abort(404);
-   }
-
-   return view('shop.add-custom-content');
- }// End method create
- public function get_spacial(){
-  $product=Products::where('id',$this->request->id)->first();
-  
-  
-  if($product->disable_shiping && array_search($this->request->name, json_decode($product->disable_shiping,true))){
-      $disabele_cu=true;}else{$disabele_cu=false;}
-  if($product->spacial_country_fees && array_key_exists($this->request->name, json_decode($product->spacial_country_fees,true))){
-      $getspass=json_decode($product->spacial_country_fees,true)[$this->request->name];}else{$getspass=false;}
-  if($getspass){($disabele_cu)?$su=2:$su=true;$totals=Helper::calculateProductPriceOnStore($product->price, $product->country_free_shipping <> auth()->user()->countries_id ? 0 : '0.00',$getspass);}else{
-      ($disabele_cu)?$su=2:$su=false;$totals=Helper::calculateProductPriceOnStore($product->price, $product->country_free_shipping <> auth()->user()->countries_id ? $product->shipping_fee : '0.00');}
-  return response()->json([
-         'success' => $su,
-         'ship' =>Helper::amountFormatDecimal($getspass),
-         'total'=>$totals
-     ]);   
- }
- public function storeCustomContent()
- {
-   $categories = ShopCategories::count();
-   $path = config('path.shop');
-
-   // Currency Position
-   if ($this->settings->currency_position == 'right') {
-     $currencyPosition =  2;
-   } else {
-     $currencyPosition =  null;
-   }
-
-   $messages = [
-   'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
-   'tags.required' => trans('validation.required', ['attribute' => __('general.tags')]),
-   'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
-   'price.min' => trans('general.amount_minimum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-   'price.max' => trans('general.amount_maximum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-   'delivery_time.required' => trans('validation.required', ['attribute' => __('general.delivery_time')]),
-   'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
-   ];
-
-   // Media Files Preview
-   $fileuploaderPreview = $this->request->input('fileuploader-list-preview');
-   $fileuploaderPreview = json_decode($fileuploaderPreview, TRUE);
-
-   if (! $fileuploaderPreview) {
-     return response()->json([
-         'success' => false,
-         'errors' => ['error' => __('general.image_preview_required')],
-     ]);
-   }
-
-   $input = $this->request->all();
-
-   $validator = Validator::make($input, [
-     'name'     => 'required|min:5|max:100',
-     'tags'     => 'required',
-     'description' => 'required|min:10',
-     'price'       => 'required|numeric|min:'.$this->settings->min_price_product.'|max:'.$this->settings->max_price_product,
-     'delivery_time' => 'required',
-     'category' => Rule::requiredIf($categories),
-   ], $messages);
-
-    if ($validator->fails()) {
-         return response()->json([
-             'success' => false,
-             'errors' => $validator->getMessageBag()->toArray(),
-         ]);
-     } //<-- Validator
-
-     // Validate length tags
-     $tagsLength = explode(',', $this->request->tags);
-
-     	foreach ($tagsLength as $tag) {
-     		if (strlen($tag) < 2) {
-          return response()->json([
-              'success' => false,
-              'errors' => ['error' => trans('general.error_length_tags')],
-          ]);
-     	}
+    // Currency Position
+    if ($this->settings->currency_position == 'right') {
+      $currencyPosition =  2;
+    } else {
+      $currencyPosition =  null;
     }
 
-     $product              = new Products();
-     $product->user_id     = auth()->id();
-     $product->name        = $this->request->name;
-     $product->type        = 'custom';
-     $product->price       = $this->request->price;
-     $product->delivery_time = $this->request->delivery_time;
-     $product->tags        = $this->request->tags;
-     $product->category    = $this->request->category;
-     $product->description = trim(Helper::checkTextDb($this->request->description));
-     $product->save();
+    $messages = [
+      'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
+      'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
+      'price.min' => trans('general.amount_minimum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'price.max' => trans('general.amount_maximum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
+    ];
 
-     // Insert Images Preview
-     if ($fileuploaderPreview) {
-       foreach ($fileuploaderPreview as $key => $media) {
-         MediaProducts::create([
-           'products_id' => $product->id,
-           'name' => $media['file'],
-           'products_id' => $product->id
-         ]);
+    // Media Files Preview
+    $fileuploaderPreview = $this->request->input('fileuploader-list-preview');
+    $fileuploaderPreview = json_decode($fileuploaderPreview, TRUE);
 
-         // Move file to Storage
-				 $this->moveFileStorage($media['file'], $path);
+    // Media File
+    $fileuploaderFile = $this->request->input('fileuploader-list-file');
+    $fileuploaderFile = json_decode($fileuploaderFile, TRUE);
 
-       }
-     }// Insert Images Previews
+    if (!$fileuploaderPreview) {
+      return response()->json([
+        'success' => false,
+        'errors' => ['error' => __('general.image_preview_required')],
+      ]);
+    }
 
-     return response()->json([
-         'success' => true,
-         'url' => url('shop/product', $product->id)
-     ]);
+    if (!$fileuploaderFile) {
+      return response()->json([
+        'success' => false,
+        'errors' => ['error' => __('general.file_required')],
+      ]);
+    }
 
- }// End method storeCustomContent
+    $input = $this->request->all();
 
- /**
-    * Move file to Storage
-    */
- protected function moveFileStorage($file, $path)
- {
-    $localFile = public_path('temp/'.$file);
+    $validator = Validator::make($input, [
+      'name'     => 'required|min:5|max:100',
+      'tags'     => 'required',
+      'category' => Rule::requiredIf($categories),
+      'description' => 'required|min:10',
+      'price'       => 'required|numeric|min:' . $this->settings->min_price_product . '|max:' . $this->settings->max_price_product,
+    ], $messages);
 
-     // Move the file...
-     Storage::putFileAs($path, new File($localFile), $file);
+    if ($validator->fails()) {
+      return response()->json([
+        'success' => false,
+        'errors' => $validator->getMessageBag()->toArray(),
+      ]);
+    } //<-- Validator
 
-     // Delete temp file
+    // Validate length tags
+    $tagsLength = explode(',', $this->request->tags);
+
+    foreach ($tagsLength as $tag) {
+      if (strlen($tag) < 2) {
+        return response()->json([
+          'success' => false,
+          'errors' => ['error' => trans('general.error_length_tags')],
+        ]);
+      }
+    }
+
+    $product              = new Products();
+    $product->user_id     = auth()->id();
+    $product->name        = $this->request->name;
+    $product->price       = $this->request->price;
+    $product->tags        = $this->request->tags;
+    $product->category    = $this->request->category;
+    $product->description = trim(Helper::checkTextDb($this->request->description));
+    $product->save();
+
+    // Insert Images Preview
+    if ($fileuploaderPreview) {
+      foreach ($fileuploaderPreview as $key => $media) {
+        MediaProducts::create([
+          'products_id' => $product->id,
+          'name' => $media['file'],
+          'products_id' => $product->id
+        ]);
+
+        // Move file to Storage
+        $this->moveFileStorage($media['file'], $path);
+      }
+    } // Insert Images Previews
+
+    // Update File
+    if ($fileuploaderFile) {
+
+      $local = 'temp/';
+
+      foreach ($fileuploaderFile as $key => $media) {
+
+        $uploaderfile = $media['file'];
+        $img = public_path($local . $uploaderfile);
+        $ext = explode('.', $uploaderfile);
+        $mime = mime_content_type($img);
+
+        Products::whereId($product->id)->update([
+          'file' => $media['file'],
+          'mime' => $mime,
+          'extension' => $ext[1],
+          'size' => Helper::formatBytes(filesize($img), 1)
+        ]);
+
+        // Move file to Storage
+        $this->moveFileStorage($media['file'], $path);
+      }
+    } // Update File
+
+    return response()->json([
+      'success' => true,
+      'url' => url('shop/product', $product->id)
+    ]);
+  } // End method store
+
+  public function createCustomContent()
+  {
+    if (
+      auth()->check()
+      && auth()->user()->verified_id != 'yes'
+      || !$this->settings->shop
+      || !$this->settings->custom_content
+    ) {
+      abort(404);
+    }
+
+    return view('shop.add-custom-content');
+  } // End method create
+  public function get_spacial()
+  {
+    $product = Products::where('id', $this->request->id)->first();
+
+
+    if ($product->disable_shiping && array_search($this->request->name, json_decode($product->disable_shiping, true))) {
+      $disabele_cu = true;
+    } else {
+      $disabele_cu = false;
+    }
+    if ($product->spacial_country_fees && array_key_exists($this->request->name, json_decode($product->spacial_country_fees, true))) {
+      $getspass = json_decode($product->spacial_country_fees, true)[$this->request->name];
+    } else {
+      $getspass = false;
+    }
+    if ($getspass) {
+      ($disabele_cu) ? $su = 2 : $su = true;
+      $totals = Helper::calculateProductPriceOnStore($product->price, $product->country_free_shipping <> auth()->user()->countries_id ? 0 : '0.00', $getspass);
+    } else {
+      ($disabele_cu) ? $su = 2 : $su = false;
+      $totals = Helper::calculateProductPriceOnStore($product->price, $product->country_free_shipping <> auth()->user()->countries_id ? $product->shipping_fee : '0.00');
+    }
+    return response()->json([
+      'success' => $su,
+      'ship' => Helper::amountFormatDecimal($getspass),
+      'total' => $totals
+    ]);
+  }
+  public function storeCustomContent()
+  {
+    $categories = ShopCategories::count();
+    $path = config('path.shop');
+
+    // Currency Position
+    if ($this->settings->currency_position == 'right') {
+      $currencyPosition =  2;
+    } else {
+      $currencyPosition =  null;
+    }
+
+    $messages = [
+      'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
+      'tags.required' => trans('validation.required', ['attribute' => __('general.tags')]),
+      'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
+      'price.min' => trans('general.amount_minimum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'price.max' => trans('general.amount_maximum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'delivery_time.required' => trans('validation.required', ['attribute' => __('general.delivery_time')]),
+      'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
+    ];
+
+    // Media Files Preview
+    $fileuploaderPreview = $this->request->input('fileuploader-list-preview');
+    $fileuploaderPreview = json_decode($fileuploaderPreview, TRUE);
+
+    if (!$fileuploaderPreview) {
+      return response()->json([
+        'success' => false,
+        'errors' => ['error' => __('general.image_preview_required')],
+      ]);
+    }
+
+    $input = $this->request->all();
+
+    $validator = Validator::make($input, [
+      'name'     => 'required|min:5|max:100',
+      'tags'     => 'required',
+      'description' => 'required|min:10',
+      'price'       => 'required|numeric|min:' . $this->settings->min_price_product . '|max:' . $this->settings->max_price_product,
+      'delivery_time' => 'required',
+      'category' => Rule::requiredIf($categories),
+    ], $messages);
+
+    if ($validator->fails()) {
+      return response()->json([
+        'success' => false,
+        'errors' => $validator->getMessageBag()->toArray(),
+      ]);
+    } //<-- Validator
+
+    // Validate length tags
+    $tagsLength = explode(',', $this->request->tags);
+
+    foreach ($tagsLength as $tag) {
+      if (strlen($tag) < 2) {
+        return response()->json([
+          'success' => false,
+          'errors' => ['error' => trans('general.error_length_tags')],
+        ]);
+      }
+    }
+
+    $product              = new Products();
+    $product->user_id     = auth()->id();
+    $product->name        = $this->request->name;
+    $product->type        = 'custom';
+    $product->price       = $this->request->price;
+    $product->delivery_time = $this->request->delivery_time;
+    $product->tags        = $this->request->tags;
+    $product->category    = $this->request->category;
+    $product->description = trim(Helper::checkTextDb($this->request->description));
+    $product->save();
+
+    // Insert Images Preview
+    if ($fileuploaderPreview) {
+      foreach ($fileuploaderPreview as $key => $media) {
+        MediaProducts::create([
+          'products_id' => $product->id,
+          'name' => $media['file'],
+          'products_id' => $product->id
+        ]);
+
+        // Move file to Storage
+        $this->moveFileStorage($media['file'], $path);
+      }
+    } // Insert Images Previews
+
+    return response()->json([
+      'success' => true,
+      'url' => url('shop/product', $product->id)
+    ]);
+  } // End method storeCustomContent
+
+  /**
+   * Move file to Storage
+   */
+  protected function moveFileStorage($file, $path)
+  {
+    $localFile = public_path('temp/' . $file);
+
+    // Move the file...
+    Storage::putFileAs($path, new File($localFile), $file);
+
+    // Delete temp file
     unlink($localFile);
   } // end method moveFileStorage
 
   public function update()
   {
-      if($this->request->addmore){
-  $spacial=array();
-    foreach($this->request->addmore as $key => $value){
-     foreach($value as $keys => $values){
-      $spacial[$keys] =  $values;
-     }
-    }}
-if($this->request->addmores){
-$disable_sh=array();
-  $ii=1;
-    foreach($this->request->addmores as $key => $value){
-      $disable_sh[$ii] =  $value;
-      $ii++;
+    if ($this->request->addmore) {
+      $spacial = array();
+      foreach ($this->request->addmore as $key => $value) {
+        foreach ($value as $keys => $values) {
+          $spacial[$keys] =  $values;
+        }
+      }
     }
+    if ($this->request->addmores) {
+      $disable_sh = array();
+      $ii = 1;
+      foreach ($this->request->addmores as $key => $value) {
+        $disable_sh[$ii] =  $value;
+        $ii++;
+      }
     }
     $product = Products::whereId($this->request->id)->whereUserId(auth()->id())->firstOrFail();
 
@@ -545,16 +557,16 @@ $disable_sh=array();
     }
 
     $messages = [
-    'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
-    'tags.required' => trans('validation.required', ['attribute' => __('general.tags')]),
-    'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
-    'price.min' => trans('general.amount_minimum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-    'price.max' => trans('general.amount_maximum'.$currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
-    'delivery_time.required' => trans('validation.required', ['attribute' => __('general.delivery_time')]),
-    'quantity.required' => trans('validation.required', ['attribute' => __('general.quantity')]),
-    'box_contents.required' => trans('validation.required', ['attribute' => __('general.box_contents')]),
-    'box_contents.max' => trans('validation.max', ['attribute' => __('general.box_contents')]),
-    'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
+      'description.required' => trans('validation.required', ['attribute' => __('general.description')]),
+      'tags.required' => trans('validation.required', ['attribute' => __('general.tags')]),
+      'description.min' => trans('validation.min', ['attribute' => __('general.description')]),
+      'price.min' => trans('general.amount_minimum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'price.max' => trans('general.amount_maximum' . $currencyPosition, ['symbol' => $this->settings->currency_symbol, 'code' => $this->settings->currency_code]),
+      'delivery_time.required' => trans('validation.required', ['attribute' => __('general.delivery_time')]),
+      'quantity.required' => trans('validation.required', ['attribute' => __('general.quantity')]),
+      'box_contents.required' => trans('validation.required', ['attribute' => __('general.box_contents')]),
+      'box_contents.max' => trans('validation.max', ['attribute' => __('general.box_contents')]),
+      'category.required' => trans('validation.required', ['attribute' => __('general.category')]),
     ];
 
     $input = $this->request->all();
@@ -563,7 +575,7 @@ $disable_sh=array();
       'name'     => 'required|min:5|max:100',
       'tags'     => 'required',
       'description' => 'required|min:10',
-      'price'       => 'required|numeric|min:'.$this->settings->min_price_product.'|max:'.$this->settings->max_price_product,
+      'price'       => 'required|numeric|min:' . $this->settings->min_price_product . '|max:' . $this->settings->max_price_product,
       'category'     => 'required',
       'delivery_time' => Rule::requiredIf($product->type == 'custom'),
       'quantity' => Rule::requiredIf($product->type == 'physical'),
@@ -573,97 +585,97 @@ $disable_sh=array();
       ],
     ], $messages);
 
-     if ($validator->fails()) {
-          return response()->json([
-              'success' => false,
-              'errors' => $validator->getMessageBag()->toArray(),
-          ]);
-      } //<-- Validator
-
-      // Validate length tags
-      $tagsLength = explode(',', $this->request->tags);
-
-      	foreach ($tagsLength as $tag) {
-      		if (strlen($tag) < 2) {
-           return response()->json([
-               'success' => false,
-               'errors' => ['error' => trans('general.error_length_tags')],
-           ]);
-      	}
-     }
-
-      $product->name        = $this->request->name;
-      $product->price       = $this->request->price;
-      $product->shipping_fee = $this->request->shipping_fee ?? false;
-      $product->country_free_shipping = $this->request->country_free_shipping ?? false;
-      $product->tags        = $this->request->tags;
-      $product->description = trim(Helper::checkTextDb($this->request->description));
-      $product->delivery_time = $this->request->delivery_time ?? false;
-      $product->quantity     = $this->request->quantity ?? false;
-      $product->box_contents = $this->request->box_contents ?? false;
-      $product->category    = $this->request->category;
-      $product->status      = $this->request->status ?? '0';
-      $product->spacial_country_fees=($this->request->addmore)?json_encode($spacial):'';
-      $product->disable_shiping=($this->request->addmores)?json_encode($disable_sh):'';
-      $product->save();
-
+    if ($validator->fails()) {
       return response()->json([
-          'success' => true,
-          'url' => url('shop/product', $product->id)
+        'success' => false,
+        'errors' => $validator->getMessageBag()->toArray(),
       ]);
+    } //<-- Validator
 
-  }// End method store
+    // Validate length tags
+    $tagsLength = explode(',', $this->request->tags);
+
+    foreach ($tagsLength as $tag) {
+      if (strlen($tag) < 2) {
+        return response()->json([
+          'success' => false,
+          'errors' => ['error' => trans('general.error_length_tags')],
+        ]);
+      }
+    }
+
+    $product->name        = $this->request->name;
+    $product->price       = $this->request->price;
+    $product->shipping_fee = $this->request->shipping_fee ?? false;
+    $product->country_free_shipping = $this->request->country_free_shipping ?? false;
+    $product->tags        = $this->request->tags;
+    $product->description = trim(Helper::checkTextDb($this->request->description));
+    $product->delivery_time = $this->request->delivery_time ?? false;
+    $product->quantity     = $this->request->quantity ?? false;
+    $product->box_contents = $this->request->box_contents ?? false;
+    $product->category    = $this->request->category;
+    $product->status      = $this->request->status ?? '0';
+    $product->spacial_country_fees = ($this->request->addmore) ? json_encode($spacial) : '';
+    $product->disable_shiping = ($this->request->addmores) ? json_encode($disable_sh) : '';
+    $product->save();
+
+    return response()->json([
+      'success' => true,
+      'url' => url('shop/product', $product->id)
+    ]);
+  } // End method store
 
   public function show($id)
   {
-    if (! $this->settings->shop) {
+    if (!$this->settings->shop) {
       abort(404);
     }
 
     $product = Products::findOrFail($id);
 
-    if (! $product->status
-        && auth()->id()
-        != $product->user()->id
-        || ! $product->status
-        && auth()->check()
-        && auth()->user()->role == 'normal')
-        {
-          abort(404);
-        }
+    if (
+      !$product->status
+      && auth()->id()
+      != $product->user()->id
+      || !$product->status
+      && auth()->check()
+      && auth()->user()->role == 'normal'
+    ) {
+      abort(404);
+    }
 
     $uri = $this->request->path();
 
-		if (str_slug($product->name) == '') {
-				$slugUrl  = '';
-			} else {
-				$slugUrl  = '/'.str_slug($product->name);
-			}
+    if (str_slug($product->name) == '') {
+      $slugUrl  = '';
+    } else {
+      $slugUrl  = '/' . str_slug($product->name);
+    }
 
-			$urlImage = 'shop/product/'.$product->id.$slugUrl;
+    $urlImage = 'shop/product/' . $product->id . $slugUrl;
 
-			//<<<-- * Redirect the user real page * -->>>
-			$uriImage     =  $this->request->path();
-			$uriCanonical = $urlImage;
+    //<<<-- * Redirect the user real page * -->>>
+    $uriImage     =  $this->request->path();
+    $uriCanonical = $urlImage;
 
-			if ($uriImage != $uriCanonical) {
-				return redirect($uriCanonical);
-			}
+    if ($uriImage != $uriCanonical) {
+      return redirect($uriCanonical);
+    }
 
-      // Tags
-      $tags = explode(',', $product->tags);
+    // Tags
+    $tags = explode(',', $product->tags);
 
-      // Previews
-      $previews = count($product->previews);
+    // Previews
+    $previews = count($product->previews);
 
-      if (auth()->check()) {
-        $verifyPurchaseUser = $product->purchases()
-          ->whereUserId(auth()->id())
-            ->first();
-      }
+    if (auth()->check()) {
+      $verifyPurchaseUser = $product->purchases()
+        ->whereUserId(auth()->id())
+        ->first();
+    }
 
-      // Total Items of User
-      $userProducts = $product->user()->products()->whereStatus('1');
+    // Total Items of User
+    $userProducts = $product->user()->products()->whereStatus('1');
 
     return view('shop.show')->with([
       'product' => $product,
@@ -673,197 +685,442 @@ $disable_sh=array();
       'verifyPurchaseUser' => $verifyPurchaseUser ?? null,
       'totalProducts' => $userProducts->count()
     ]);
-  }// End method show
+  } // End method show
 
-  public function buy()
+  public function buy(Request $request)
   {
     // Find item exists
     $item = Products::findOrFail($this->request->id);
-    if($item->disable_shiping && array_search($this->request->cu_cuntry, json_decode($item->disable_shiping,true))){
-      $disabele_cu=true;}else{$disabele_cu=false;}
-   if($item->spacial_country_fees && array_key_exists($this->request->cu_cuntry, json_decode($item->spacial_country_fees,true))){
-      $getsp=json_decode($item->spacial_country_fees,true)[$this->request->cu_cuntry];}else{$getsp=false;}
+
+
+    if ($request->paypal_payment_gateway_buy == 'paypal') {
+      $provider = new PayPalClient([]);
+      $token = $provider->getAccessToken();
+      $provider->setAccessToken($token);
+
+      $request_data = $request->all();
+      $previousUrl = url()->previous();
+
+
+      $order = $provider->createOrder([
+        "intent" => "CAPTURE",
+        "purchase_units" => [
+          [
+            "amount" => [
+              "currency_code" => "USD",
+              "value" => $item->price
+            ]
+          ]
+        ],
+        "application_context" => [
+          "cancel_url" => route('cancel'),
+          "return_url" => route('new_success', [
+            'data' => $request_data,
+            'previousUrl' => $previousUrl
+          ])
+        ]
+      ]);
+
+      $provider->setCurrency('USD');
+      return redirect($order['links'][1]['href']);
+    }
+
+
+    if ($item->disable_shiping && is_array(json_decode($item->disable_shiping, true))) {
+      $disabele_cu = in_array($this->request->cu_cuntry, json_decode($item->disable_shiping, true));
+    } else {
+      $disabele_cu = false;
+    }
+
+    if ($item->spacial_country_fees && is_array(json_decode($item->spacial_country_fees, true))) {
+      $spacial_country_fees = json_decode($item->spacial_country_fees, true);
+      $getsp = array_key_exists($this->request->cu_cuntry, $spacial_country_fees) ? $spacial_country_fees[$this->request->cu_cuntry] : false;
+    } else {
+      $getsp = false;
+    }
+
+
+
+
     // Shipping fee
     $shippingFe = $item->country_free_shipping <> auth()->user()->countries_id ? $item->shipping_fee : 0.00;
-    ($getsp)?$feess=$getsp:$feess=$shippingFe;
-    $shippingFee=$feess;
+    ($getsp) ? $feess = $getsp : $feess = $shippingFe;
+
+    $shippingFee = $feess;
+
     $finalPriceItem = ($item->price + $shippingFee);
 
-     if ($disabele_cu) {
-          return response()->json([
-            "success" => false,
-            "errors" => ['error' => __('general.disabe_cu')]
-          ]);
-        }
+    if ($disabele_cu) {
+      return response()->json([
+        "success" => false,
+        "errors" => ['error' => __('general.disabe_cu')]
+      ]);
+    }
+
     // Verify that the user has not buy
-    if (Purchases::whereUserId(auth()->id())
-        ->whereProductsId($this->request->id)
-        ->first()
-        && $item->type == 'digital')
-        {
-          return response()->json([
-            "success" => true,
-            'url' => url('product/download', $item->id)
-          ]);
-        }
+    if (
+      Purchases::whereUserId(auth()->id())
+      ->whereProductsId($this->request->id)
+      ->first()
+      && $item->type == 'digital'
+    ) {
+      return response()->json([
+        "success" => true,
+        'url' => url('product/download', $item->id)
+      ]);
+    }
 
-        // Check that the user has sufficient balance
-        if (auth()->user()->wallet < $finalPriceItem) {
-          return response()->json([
-            "success" => false,
-            "errors" => ['error' => __('general.not_enough_funds')]
-          ]);
-        }
+    // Check that the user has sufficient balance
+    if (auth()->user()->wallet < $finalPriceItem) {
+      return response()->json([
+        "success" => false,
+        "errors" => ['error' => __('general.not_enough_funds')]
+      ]);
+    }
 
-        // Check availability (stock)
-        if ($item->type == 'physical' && $item->quantity == 0) {
-          return response()->json([
-            "success" => false,
-            "errors" => ['error' => __('general.out_stock')]
-          ]);
-        }
+    // Check availability (stock)
+    if ($item->type == 'physical' && $item->quantity == 0) {
+      return response()->json([
+        "success" => false,
+        "errors" => ['error' => __('general.out_stock')]
+      ]);
+    }
 
-        $messages = [
-        'description_custom_content.required' => trans('validation.required', ['attribute' => __('general.details_custom_content')]),
-        'address.required' => trans('validation.required', ['attribute' => __('general.address')]),
-        'city.required' => trans('validation.required', ['attribute' => __('general.city')]),
-        'zip.required' => trans('validation.required', ['attribute' => __('general.zip')]),
-        'cu_cuntry.required' => trans('validation.required', ['attribute' => __('general.country')]),
-        'name.required' => trans('validation.required', ['attribute' => __('general.name')]),
-        'email.required' => trans('validation.required', ['attribute' => __('general.email')]),
-        'state.required' => trans('validation.required', ['attribute' => __('general.state')]),
-        'phone.required' => trans('validation.required', ['attribute' => __('general.phone')]),
-        'phone.regex' => trans('validation.regex', ['attribute' => __('general.phone')]),
-        'phone.min' => trans('validation.min', ['attribute' => __('general.phone')]),
-        ];
+    $messages = [
+      'description_custom_content.required' => trans('validation.required', ['attribute' => __('general.details_custom_content')]),
+      'address.required' => trans('validation.required', ['attribute' => __('general.address')]),
+      'city.required' => trans('validation.required', ['attribute' => __('general.city')]),
+      'zip.required' => trans('validation.required', ['attribute' => __('general.zip')]),
+      'cu_cuntry.required' => trans('validation.required', ['attribute' => __('general.country')]),
+      'name.required' => trans('validation.required', ['attribute' => __('general.name')]),
+      'email.required' => trans('validation.required', ['attribute' => __('general.email')]),
+      'state.required' => trans('validation.required', ['attribute' => __('general.state')]),
+      'phone.required' => trans('validation.required', ['attribute' => __('general.phone')]),
+      'phone.regex' => trans('validation.regex', ['attribute' => __('general.phone')]),
+      'phone.min' => trans('validation.min', ['attribute' => __('general.phone')]),
+    ];
 
-        $validator = Validator::make($this->request->all(), [
-          'description_custom_content' => Rule::requiredIf($item->type == 'custom'),
-          'address' => Rule::requiredIf($item->type == 'physical'),
-          'cu_cuntry' => Rule::requiredIf($item->type == 'physical'),
-          'name' => Rule::requiredIf($item->type == 'physical'),
-          'email' => Rule::requiredIf($item->type == 'physical'),
-          'state' => Rule::requiredIf($item->type == 'physical'),
-          'city' => Rule::requiredIf($item->type == 'physical'),
-          'zip' => Rule::requiredIf($item->type == 'physical'),
-          'phone' => [
-            'regex:/^([0-9\s\-\+\(\)]*)$/',
-            'min:10',
-            Rule::requiredIf($item->type == 'physical')
-          ],
-        ], $messages);
+    $validator = Validator::make($this->request->all(), [
+      'description_custom_content' => Rule::requiredIf($item->type == 'custom'),
+      'address' => Rule::requiredIf($item->type == 'physical'),
+      'cu_cuntry' => Rule::requiredIf($item->type == 'physical'),
+      'name' => Rule::requiredIf($item->type == 'physical'),
+      'email' => Rule::requiredIf($item->type == 'physical'),
+      'state' => Rule::requiredIf($item->type == 'physical'),
+      'city' => Rule::requiredIf($item->type == 'physical'),
+      'zip' => Rule::requiredIf($item->type == 'physical'),
+      'phone' => [
+        'regex:/^([0-9\s\-\+\(\)]*)$/',
+        'min:10',
+        Rule::requiredIf($item->type == 'physical')
+      ],
+    ], $messages);
 
-         if ($validator->fails()) {
-              return response()->json([
-                  'success' => false,
-                  'errors' => $validator->getMessageBag()->toArray(),
-              ]);
-          } //<-- Validator
+    if ($validator->fails()) {
+      return response()->json([
+        'success' => false,
+        'errors' => $validator->getMessageBag()->toArray(),
+      ]);
+    } //<-- Validator
 
-        // Admin and user earnings calculation
-        $earnings = $this->earningsAdminUser($item->user()->custom_fee, $finalPriceItem, null, null);
+    // Admin and user earnings calculation
+    $earnings = $this->earningsAdminUser($item->user()->custom_fee, $finalPriceItem, null, null);
 
-        //== Insert Transaction
-        $txn = $this->transaction(
-          'purchase_'.str_random(25),
-          auth()->id(),
-          false,
-          $item->user()->id,
-          $finalPriceItem,
-          $earnings['user'],
-          $earnings['admin'],
-          'Wallet',
-          'purchase',
-          $earnings['percentageApplied'],
-          auth()->user()->taxesPayable()
-        );
+    //== Insert Transaction
+    $txn = $this->transaction(
+      'purchase_' . str_random(25),
+      auth()->id(),
+      false,
+      $item->user()->id,
+      $finalPriceItem,
+      $earnings['user'],
+      $earnings['admin'],
+      'Wallet',
+      'purchase',
+      $earnings['percentageApplied'],
+      auth()->user()->taxesPayable()
+    );
 
-        // Subtract user funds
-        auth()->user()->decrement('wallet', Helper::amountGrossProductShop($item->price, $shippingFee));
+    // Subtract user funds
+    auth()->user()->decrement('wallet', Helper::amountGrossProductShop($item->price, $shippingFee));
 
-        // Add Earnings to User
-        $item->user()->increment('balance', $earnings['user']);
+    // Add Earnings to User
+    $item->user()->increment('balance', $earnings['user']);
 
-        // Insert Purchase
-        $purchase = new Purchases();
-        $purchase->transactions_id = $txn->id;
-        $purchase->user_id = auth()->id();
-        $purchase->products_id = $item->id;
-        $purchase->delivery_status = $item->type == 'digital' ? 'delivered' : 'pending';
-        $purchase->description_custom_content = $this->request->description_custom_content;
-        $purchase->cu_cuntry = $this->request->cu_cuntry;
-        $purchase->name = $this->request->name;
-        $purchase->email = $this->request->email;
-        $purchase->state = $this->request->state;
-        $purchase->address = $this->request->address;
-        $purchase->city = $this->request->city;
-        $purchase->zip = $this->request->zip;
-        $purchase->phone = $this->request->phone;
-        $purchase->save();
+    // Insert Purchase
+    $purchase = new Purchases();
+    $purchase->transactions_id = $txn->id;
+    $purchase->user_id = auth()->id();
+    $purchase->products_id = $item->id;
+    $purchase->delivery_status = $item->type == 'digital' ? 'delivered' : 'pending';
+    $purchase->description_custom_content = $this->request->description_custom_content;
+    $purchase->cu_cuntry = $this->request->cu_cuntry;
+    $purchase->name = $this->request->name;
+    $purchase->email = $this->request->email;
+    $purchase->state = $this->request->state;
+    $purchase->address = $this->request->address;
+    $purchase->city = $this->request->city;
+    $purchase->zip = $this->request->zip;
+    $purchase->phone = $this->request->phone;
+    $purchase->save();
 
-        if ($item->type == 'physical' && $item->quantity != 0) {
-          // Subtract an item from stock
-          $item->decrement('quantity', 1);
-        }
+    if ($item->type == 'physical' && $item->quantity != 0) {
+      // Subtract an item from stock
+      $item->decrement('quantity', 1);
+    }
 
-        // Send Notification to Creator
-        Notifications::send($item->user()->id, auth()->id(), 15, $item->id);
+    // Send Notification to Creator
+    Notifications::send($item->user()->id, auth()->id(), 15, $item->id);
 
-        // Send Email to Creator
-        try {
-  				$item->user()->notify(new NewSale($purchase));
-  			} catch (\Exception $e) {
-  				\Log::info('Error send email to creator on sale - '.$e->getMessage());
-  			}
+    // Send Email to Creator
+    try {
+      $item->user()->notify(new NewSale($purchase));
+    } catch (\Exception $e) {
+      \Log::info('Error send email to creator on sale - ' . $e->getMessage());
+    }
 
-        if ($item->type == 'digital') {
-          return response()->json([
-            'success' => true,
-            'url' => url('shop/product', $item->id)
-          ]);
-        } else {
-          return response()->json([
-            'success' => true,
-            'buyCustomContent' => true,
-            'wallet' => Helper::userWallet()
-          ]);
+    if ($item->type == 'digital') {
+      return response()->json([
+        'success' => true,
+        'url' => url('shop/product', $item->id)
+      ]);
+    } else {
+      return response()->json([
+        'success' => true,
+        'buyCustomContent' => true,
+        'wallet' => Helper::userWallet()
+      ]);
+    }
+  } // End method buy
 
-        }
 
-  }// End method buy
+
+  public function succ(Request $request)
+  {
+    $product_data = $request['data'];
+    $previousUrl = $request["previousUrl"];
+    $PayerID = $request["PayerID"];
+
+
+    // ================================================= new =============================================
+
+
+    $product_data = request()->query('data');
+    // dd($product_data);
+
+
+    // Find item exists
+    $item = Products::findOrFail($product_data["id"]);
+    // dd($item);
+
+
+    if ($item->disable_shiping && is_array(json_decode($item->disable_shiping, true))) {
+      $disabele_cu = in_array($product_data["cu_cuntry"], json_decode($item->disable_shiping, true));
+    } else {
+      $disabele_cu = false;
+    }
+
+    if ($item->spacial_country_fees && is_array(json_decode($item->spacial_country_fees, true))) {
+      $spacial_country_fees = json_decode($item->spacial_country_fees, true);
+      $getsp = array_key_exists($product_data["cu_cuntry"], $spacial_country_fees) ? $spacial_country_fees[$product_data["cu_cuntry"]] : false;
+    } else {
+      $getsp = false;
+    }
+
+    // Shipping fee
+    $shippingFe = $item->country_free_shipping <> auth()->user()->countries_id ? $item->shipping_fee : 0.00;
+    ($getsp) ? $feess = $getsp : $feess = $shippingFe;
+
+    $shippingFee = $feess;
+
+    $finalPriceItem = ($item->price + $shippingFee);
+
+    if ($disabele_cu) {
+      return response()->json([
+        "success" => false,
+        "errors" => ['error' => __('general.disabe_cu')]
+      ]);
+    }
+
+    // Verify that the user has not buy
+    if (
+      Purchases::whereUserId(auth()->id())
+      ->whereProductsId($product_data["id"])
+      ->first()
+      && $item->type == 'digital'
+    ) {
+      return response()->json([
+        "success" => true,
+        'url' => url('product/download', $item->id)
+      ]);
+    }
+
+    // Check that the user has sufficient balance
+    // if (auth()->user()->wallet < $finalPriceItem) {
+    //   return response()->json([
+    //     "success" => false,
+    //     "errors" => ['error' => __('general.not_enough_funds')]
+    //   ]);
+    // }
+
+    // Check availability (stock)
+    if ($item->type == 'physical' && $item->quantity == 0) {
+      return response()->json([
+        "success" => false,
+        "errors" => ['error' => __('general.out_stock')]
+      ]);
+    }
+
+    $messages = [
+      'description_custom_content.required' => trans('validation.required', ['attribute' => __('general.details_custom_content')]),
+      'address.required' => trans('validation.required', ['attribute' => __('general.address')]),
+      'city.required' => trans('validation.required', ['attribute' => __('general.city')]),
+      'zip.required' => trans('validation.required', ['attribute' => __('general.zip')]),
+      'cu_cuntry.required' => trans('validation.required', ['attribute' => __('general.country')]),
+      'name.required' => trans('validation.required', ['attribute' => __('general.name')]),
+      'email.required' => trans('validation.required', ['attribute' => __('general.email')]),
+      'state.required' => trans('validation.required', ['attribute' => __('general.state')]),
+      'phone.required' => trans('validation.required', ['attribute' => __('general.phone')]),
+      'phone.regex' => trans('validation.regex', ['attribute' => __('general.phone')]),
+      'phone.min' => trans('validation.min', ['attribute' => __('general.phone')]),
+    ];
+
+    $validator = Validator::make($product_data, [
+      'description_custom_content' => Rule::requiredIf($item->type == 'custom'),
+      'address' => Rule::requiredIf($item->type == 'physical'),
+      'cu_cuntry' => Rule::requiredIf($item->type == 'physical'),
+      'name' => Rule::requiredIf($item->type == 'physical'),
+      'email' => Rule::requiredIf($item->type == 'physical'),
+      'state' => Rule::requiredIf($item->type == 'physical'),
+      'city' => Rule::requiredIf($item->type == 'physical'),
+      'zip' => Rule::requiredIf($item->type == 'physical'),
+      'phone' => [
+        'regex:/^([0-9\s\-\+\(\)]*)$/',
+        'min:10',
+        Rule::requiredIf($item->type == 'physical')
+      ],
+    ], $messages);
+
+    if ($validator->fails()) {
+      return response()->json([
+        'success' => false,
+        'errors' => $validator->getMessageBag()->toArray(),
+      ]);
+    } //<-- Validator
+
+    // Admin and user earnings calculation
+    $earnings = $this->earningsAdminUser($item->user()->custom_fee, $finalPriceItem, null, null);
+
+    // dd($earnings);
+
+    //== Insert Transaction
+    $txn = $this->transaction(
+      'purchase_' . str_random(25),
+      auth()->id(),
+      false,
+      $item->user()->id,
+      $finalPriceItem,
+      $earnings['user'],
+      $earnings['admin'],
+      'paypal',
+      'purchase',
+      $earnings['percentageApplied'],
+      auth()->user()->taxesPayable()
+    );
+
+    // Subtract user funds
+    // auth()->user()->decrement('wallet', Helper::amountGrossProductShop($item->price, $shippingFee));
+
+    // Add Earnings to User
+    $item->user()->increment('balance', $earnings['user']);
+
+    // Insert Purchase
+    $purchase = new Purchases();
+    $purchase->transactions_id = $txn->id;
+    $purchase->user_id = auth()->id();
+    $purchase->products_id = $item->id;
+    $purchase->delivery_status = $item->type == 'digital' ? 'delivered' : 'pending';
+    $purchase->description_custom_content = $this->request->description_custom_content;
+    $purchase->cu_cuntry = $this->request->cu_cuntry;
+    $purchase->name = $this->request->name;
+    $purchase->email = $this->request->email;
+    $purchase->state = $this->request->state;
+    $purchase->address = $this->request->address;
+    $purchase->city = $this->request->city;
+    $purchase->zip = $this->request->zip;
+    $purchase->phone = $this->request->phone;
+    $purchase->save();
+
+    if ($item->type == 'physical' && $item->quantity != 0) {
+      // Subtract an item from stock
+      $item->decrement('quantity', 1);
+    }
+
+    // Send Notification to Creator
+    Notifications::send($item->user()->id, auth()->id(), 15, $item->id);
+
+    // Send Email to Creator
+    try {
+      $item->user()->notify(new NewSale($purchase));
+    } catch (\Exception $e) {
+      \Log::info('Error send email to creator on sale - ' . $e->getMessage());
+    }
+
+
+
+
+
+    // ================================================= new =============================================
+
+
+
+    $provider = new PayPalClient();
+    $provider->setApiCredentials(config('paypal'));
+    $provider->getAccessToken();
+    $response = $provider->capturePaymentOrder($request['token']);
+
+    if ($item->type == 'digital') {
+      return Redirect::to($previousUrl);
+    } else {
+      
+      return Redirect::to($previousUrl);
+    }
+  }
+
+
+
 
   public function download($id)
   {
     $item = Products::whereId($id)
-    ->whereType('digital')
-    ->firstOrFail();
+      ->whereType('digital')
+      ->firstOrFail();
 
     $file = $item->purchases()
       ->where('user_id', auth()->id())
-        ->first();
+      ->first();
 
-        if (! $file && auth()->user()->role != 'admin') {
-          abort(404);
-        }
+    if (!$file && auth()->user()->role != 'admin') {
+      abort(404);
+    }
 
-        $pathFile = config('path.shop').$item->file;
+    $pathFile = config('path.shop') . $item->file;
 
-        $headers = [
-  				'Content-Type:' => $item->mime,
-  				'Cache-Control' => 'no-cache, no-store, must-revalidate',
-  				'Pragma' => 'no-cache',
-  				'Expires' => '0'
-  			];
+    $headers = [
+      'Content-Type:' => $item->mime,
+      'Cache-Control' => 'no-cache, no-store, must-revalidate',
+      'Pragma' => 'no-cache',
+      'Expires' => '0'
+    ];
 
-        return Storage::download($pathFile, $item->name.'.'.$item->extension, $headers);
-
-  }// End method download
+    return Storage::download($pathFile, $item->name . '.' . $item->extension, $headers);
+  } // End method download
 
   public function destroy($id)
   {
     $item = Products::whereId($id)
-        ->where('user_id', auth()->id())
-        ->firstOrFail();
+      ->where('user_id', auth()->id())
+      ->firstOrFail();
 
     $path = config('path.shop');
 
@@ -874,18 +1131,18 @@ $disable_sh=array();
     $reports = Reports::whereReportId($id)->whereType('item')->get();
 
     if (isset($reports)) {
-      foreach($reports as $report) {
+      foreach ($reports as $report) {
         $report->delete();
       }
     }
 
     // Delete Preview
     foreach ($item->previews as $previews) {
-      Storage::delete($path.$previews->name);
+      Storage::delete($path . $previews->name);
     }
 
     // Delete file
-    Storage::delete($path.$item->file);
+    Storage::delete($path . $item->file);
 
     // Delete purchases
     $item->purchases()->delete();
@@ -897,111 +1154,112 @@ $disable_sh=array();
       'success' => true,
       'url' => url(auth()->user()->username)
     ]);
-  }// End method download
+  } // End method download
 
   public function deliveredProduct($id)
   {
     $purchase = auth()->user()->sales()
-       ->where(function ($query) use($id) {
-    $query->where('delivery_status', '=', 'inst')
+      ->where(function ($query) use ($id) {
+        $query->where('delivery_status', '=', 'inst')
           ->orWhere('delivery_status', '=', 'pending');
-        })
-        ->where('purchases.id', $id)
-        ->firstOrFail();
-        
-        $prtype=products::where('id',$purchase->products_id)->firstOrFail()->type;
-        if($prtype== 'physical' && $purchase->delivery_status=='pending'){
-         $purchase->delivery_status = 'inst';   
-        }else{
-        $purchase->delivery_status = 'delivered';}
-        $purchase->save();
-        
-        $buyer = Purchases::find($id)->user_id;
-       
-        $date = Purchases::where('id', $id)->firstOrFail()->created_at;
-       
-        $seller = Products::find(Purchases::find($id)->products_id)->user_id;
-     
-        Notifications::send($buyer, $seller, 18, 1, $date);
-        
+      })
+      ->where('purchases.id', $id)
+      ->firstOrFail();
 
-        $mail = user::find($buyer)->email;
-        
+    $prtype = products::where('id', $purchase->products_id)->firstOrFail()->type;
+    if ($prtype == 'physical' && $purchase->delivery_status == 'pending') {
+      $purchase->delivery_status = 'inst';
+    } else {
+      $purchase->delivery_status = 'delivered';
+    }
+    $purchase->save();
 
-        mail($mail, 'Your order has been updated', 'Your order has been updated. You can track your order clicking the following link https://shopnblog.com/my/purchased/items', "From: shopnbloginfo@shopnblog.com");
-        
-        
-        return response()->json([
-          'success' => true
-        ]);
-  }// end deliveredProduct
+    $buyer = Purchases::find($id)->user_id;
+
+    $date = Purchases::where('id', $id)->firstOrFail()->created_at;
+
+    $seller = Products::find(Purchases::find($id)->products_id)->user_id;
+
+    Notifications::send($buyer, $seller, 18, 1, $date);
+
+
+    $mail = user::find($buyer)->email;
+
+
+    mail($mail, 'Your order has been updated', 'Your order has been updated. You can track your order clicking the following link https://shopnblog.com/my/purchased/items', "From: shopnbloginfo@shopnblog.com");
+
+
+    return response()->json([
+      'success' => true
+    ]);
+  } // end deliveredProduct
 
   public function rejectOrder($id)
   {
     $purchase = auth()->user()->sales()
-        ->where(function ($query) use($id) {
-    $query->where('delivery_status', '=', 'inst')
+      ->where(function ($query) use ($id) {
+        $query->where('delivery_status', '=', 'inst')
           ->orWhere('delivery_status', '=', 'pending');
-        })
-        ->where('purchases.id', $id)
-        ->firstOrFail();
-        
-          $buyer = Purchases::find($id)->user_id;
-       
-        $date = Purchases::where('id', $id)->firstOrFail()->created_at;
-       
-        $seller = Products::find(Purchases::find($id)->products_id)->user_id;
-     
-        Notifications::send($buyer, $seller, 18, 1, $date);
-        
+      })
+      ->where('purchases.id', $id)
+      ->firstOrFail();
 
-        $mail = user::find($buyer)->email;
-        
+    $buyer = Purchases::find($id)->user_id;
 
-        mail($mail, 'Your order has been cancelled', 'Your order has been cancelled. You can track your order clicking the following link https://shopnblog.com/my/purchased/items', "From: shopnbloginfo@shopnblog.com");
-        
-        
+    $date = Purchases::where('id', $id)->firstOrFail()->created_at;
 
-          $amount = $purchase->transactions()->amount;
+    $seller = Products::find(Purchases::find($id)->products_id)->user_id;
 
-          $taxes = TaxRates::whereIn('id', collect(explode('_', $purchase->transactions()->taxes)))->get();
-          $totalTaxes = ($amount * $taxes->sum('percentage') / 100);
+    Notifications::send($buyer, $seller, 18, 1, $date);
 
-          // Total paid by buyer
-          $amountRefund = number_format($amount + $purchase->transactions()->transaction_fee + $totalTaxes, 2, '.', '');
 
-          // Get amount referral (if exist)
-          $this->deductReferredBalanceByRefund($purchase->transactions());
+    $mail = user::find($buyer)->email;
 
-          // Add funds to wallet buyer
-          $purchase->user()->increment('wallet', $amountRefund);
 
-          // Remove creator funds
-          if (auth()->user()->balance <> 0.00) {
-            auth()->user()->decrement('balance', $purchase->transactions()->earning_net_user);
-          } else {
-            // If the creator has withdrawn their entire balance remove from withdrawal
-            $withdrawalPending = Withdrawals::whereUserId(auth()->id())->whereStatus('pending')->first();
-
-            if ($withdrawalPending) {
-              $withdrawalPending->decrement('amount', $amountRefund);
-            }
-          }
-
-          // Delete transaction
-          $purchase->transactions()->delete();
-
-          // Delete purchase
-          $purchase->delete();
+    mail($mail, 'Your order has been cancelled', 'Your order has been cancelled. You can track your order clicking the following link https://shopnblog.com/my/purchased/items', "From: shopnbloginfo@shopnblog.com");
 
 
 
+    $amount = $purchase->transactions()->amount;
+
+    $taxes = TaxRates::whereIn('id', collect(explode('_', $purchase->transactions()->taxes)))->get();
+    $totalTaxes = ($amount * $taxes->sum('percentage') / 100);
+
+    // Total paid by buyer
+    $amountRefund = number_format($amount + $purchase->transactions()->transaction_fee + $totalTaxes, 2, '.', '');
+
+    // Get amount referral (if exist)
+    $this->deductReferredBalanceByRefund($purchase->transactions());
+
+    // Add funds to wallet buyer
+    $purchase->user()->increment('wallet', $amountRefund);
+
+    // Remove creator funds
+    if (auth()->user()->balance <> 0.00) {
+      auth()->user()->decrement('balance', $purchase->transactions()->earning_net_user);
+    } else {
+      // If the creator has withdrawn their entire balance remove from withdrawal
+      $withdrawalPending = Withdrawals::whereUserId(auth()->id())->whereStatus('pending')->first();
+
+      if ($withdrawalPending) {
+        $withdrawalPending->decrement('amount', $amountRefund);
+      }
+    }
+
+    // Delete transaction
+    $purchase->transactions()->delete();
+
+    // Delete purchase
+    $purchase->delete();
 
 
-        return response()->json([
-          'success' => true
-        ]);
-  }// end rejectOrder
+
+
+
+    return response()->json([
+      'success' => true
+    ]);
+  } // end rejectOrder
 
   public function report()
   {
@@ -1015,27 +1273,27 @@ $disable_sh=array();
       'reason' => 'required|in:item_not_received,spoofing,copyright,privacy_issue,violent_sexual,fraud',
     ]);
 
-     if ($validator->fails()) {
-          return response()->json([
-              'success' => false,
-              'text' => __('general.error'),
-          ]);
-      }
+    if ($validator->fails()) {
+      return response()->json([
+        'success' => false,
+        'text' => __('general.error'),
+      ]);
+    }
 
     if ($data->exists) {
       return response()->json([
-          'success' => false,
-          'text' => __('general.already_sent_report'),
+        'success' => false,
+        'text' => __('general.already_sent_report'),
       ]);
     } else {
       $data->reason = $this->request->reason;
       $data->save();
 
       return response()->json([
-          'success' => true,
-          'text' => __('general.reported_success'),
+        'success' => true,
+        'text' => __('general.reported_success'),
       ]);
     }
-  }// end report
+  } // end report
 
 }

@@ -137,9 +137,16 @@ td{
           && $product->type == 'physical'
           || auth()->guest()
           )
+          {{-- ========================================= --}}
+
+      {{-- afsdfasfafdafasf --}}
+
       <button class="btn btn-1 btn-primary btn-block mt-4" @if ($product->quantity == 0 && $product->type == 'physical') disabled @endif type="button" data-toggle="modal" @auth data-target="#buyNowForm" @else data-target="#loginFormModal" @endauth>
         {{ $product->quantity == 0 && $product->type == 'physical' ? __('general.sold_out') : __('general.buy_now') }}
       </button>
+
+
+      
 
     @elseif (auth()->check() && auth()->id() != $product->user()->id && $verifyPurchaseUser && $product->type == 'digital')
       <a class="btn btn-1 btn-primary btn-block mt-4" href="{{ url('product/download', $product->id) }}">

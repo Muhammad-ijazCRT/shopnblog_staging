@@ -40,7 +40,6 @@ class PayPalController extends Controller
    */
     public function show()
     {
-
     if (! $this->request->expectsJson()) {
         abort(404);
     }
@@ -60,7 +59,7 @@ class PayPalController extends Controller
       // Get Payment Gateway
       $payment = PaymentGateways::findOrFail($this->request->payment_gateway);
 
-        $urlSuccess = url('buy/subscription/success', $user->username).'?paypal=1';
+      $urlSuccess = url('buy/subscription/success', [$user->username, $plan->price]).'?paypal=1';
   			$urlCancel   = url('buy/subscription/cancel', $user->username);
 
         switch ($plan->interval) {
@@ -587,12 +586,21 @@ if ($verified) {
                //============ Start PPV ==============
                case 'ppv':
 
+
+                // $total_amount = $data['amount'];
+                // // Calculate admin commission (15%)
+                // $admin_commission = 0.15 * $total_amount;
+                // // Calculate the amount to deposit to the customer
+                // $deposit_to_customer = $total_amount - $admin_commission;
+               
+               
+                // Check outh POST variable and insert in DB
+               $verifiedTxnId = Deposits::where('txn_id', $txnId)->first();
                // Check if it is a Message or Post
                $media = $data['m'] ? Messages::find($data['id']) : Updates::find($data['id']);
-
                // Admin and user earnings calculation
                $earnings = $this->earningsAdminUser($media->user()->custom_fee, $data['amount'], $payment->fee, $payment->fee_cents);
-
+               
                  // Check outh POST variable and insert in DB
                  $verifiedTxnId = Transactions::whereTxnId($txnId)->first();
 

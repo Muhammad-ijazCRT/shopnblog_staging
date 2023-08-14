@@ -207,7 +207,7 @@
 					 @foreach ($subscriptions as $subscription)
 						 <div class="d-flex mb-3">
 							 <div class="flex-shrink-0">
-								 <img src="{{ Helper::getFile(config('path.avatar').$subscription->user()->avatar) }}" width="50" class="rounded-circle" />
+								 {{-- <img src="{{ Helper::getFile(config('path.avatar').$subscription->user()->avatar) }}" width="50" class="rounded-circle" /> --}}
 							 </div>
 							  <div class="flex-grow-1 ms-3">
 							    <h6 class="m-0 fw-light text-break">

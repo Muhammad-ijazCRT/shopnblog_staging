@@ -2,25 +2,25 @@
 
 namespace App\Http\Controllers;
 
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Http\Request;
+use Mail;
+use Image;
+use App\Helper;
+use Carbon\Carbon;
 use App\Models\User;
 use App\Models\Plans;
-use App\Models\Subscriptions;
-use App\Models\AdminSettings;
 use App\Models\Withdrawals;
-use App\Models\Notifications;
 use App\Models\Transactions;
-use Fahim\PaypalIPN\PaypalIPNListener;
-use App\Helper;
-use Mail;
-use Carbon\Carbon;
-use Illuminate\Support\Facades\Validator;
+use Illuminate\Http\Request;
+use App\Models\AdminSettings;
+use App\Models\Notifications;
+use App\Models\Subscriptions;
 use App\Models\PaymentGateways;
-use Image;
 use App\Models\AutomatedMessage;
-use App\Models\MediaAutomatedMessage;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Auth;
+use App\Models\MediaAutomatedMessage;
+use Fahim\PaypalIPN\PaypalIPNListener;
+use Illuminate\Support\Facades\Validator;
 use App\Http\Controllers\MessagesController;
 
 
@@ -84,11 +84,12 @@ class SubscriptionsController extends Controller
             ]);
         }
 
+        
         // Wallet
         if ($this->request->payment_gateway == 'wallet') {
           return $this->sendWallet();
         }
-
+        
         // Get name of Payment Gateway
         $payment = PaymentGateways::findOrFail($this->request->payment_gateway);
 

@@ -30,6 +30,7 @@ use Illuminate\Support\Str;
 use App\Events\NewPostEvent;
 use App\Models\Transactions;
 use Illuminate\Http\Request;
+use App\Models\Admin_earning;
 use App\Models\AdminSettings;
 use App\Models\Notifications;
 use App\Models\Subscriptions;
@@ -69,8 +70,12 @@ class AdminController extends Controller
 		$users               = User::orderBy('id','DESC')->take(4)->get();
 		$total_raised_funds  = Transactions::whereApproved('1')->sum('earning_net_admin');
 		$paypal_deposit_funds  = Deposits::where('payment_gateway', 'paypal')->where('status','Active')->sum('admin_commission');
+		$admin_earning = Admin_earning::sum('amount');
+
 		// return $total_raised_funds;
 		$total_raised_funds += $paypal_deposit_funds;
+		$total_raised_funds += $admin_earning;
+
 		$total_raised_funds_moderator  = Transactions::whereApproved('1')->sum('earning_net_moderator_admin');
 		$total_subscriptions = Subscriptions::count();
 		$subscriptions       = Subscriptions::orderBy('id','desc')->take(4)->get();
@@ -637,6 +642,12 @@ class AdminController extends Controller
 	public function withdrawalsPaid(Request $request)
 	{
 		$data = Withdrawals::findOrFail($request->id);
+
+		$admin_commission_calculate =  $data->amount * 0.15;
+		$admin_commission = new Admin_earning;
+		$admin_commission->amount = $admin_commission_calculate;
+		$admin_commission->save();
+
 
 		$user = $data->user();
 

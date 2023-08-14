@@ -5,21 +5,21 @@ namespace App\Http\Controllers;
 use Mail;
 use App\Helper;
 use Carbon\Carbon;
-use Illuminate\Support\Facades\Auth;
-use Illuminate\Http\Request;
 use App\Models\User;
-use App\Models\AdminSettings;
+use Yabacon\Paystack;
+use App\Models\Messages;
 use App\Models\LiveComments;
+use App\Models\Transactions;
+use Illuminate\Http\Request;
+use App\Models\AdminSettings;
+use App\Models\Conversations;
+use App\Models\Notifications;
+use App\Models\PaymentGateways;
+use Illuminate\Support\Facades\Auth;
 use Fahim\PaypalIPN\PaypalIPNListener;
 use Illuminate\Support\Facades\Validator;
-use App\Models\PaymentGateways;
-use App\Models\Transactions;
 use Laravel\Cashier\Exceptions\IncompletePayment;
 use Srmklive\PayPal\Services\PayPal as PayPalClient;
-use App\Models\Notifications;
-use App\Models\Conversations;
-use App\Models\Messages;
-use Yabacon\Paystack;
 
 
 class TipController extends Controller
@@ -105,7 +105,6 @@ class TipController extends Controller
   /**
 	 *  Send Tip Wallet
 	 *
-	 * @return Response
 	 */
    protected function sendTipWallet()
    {

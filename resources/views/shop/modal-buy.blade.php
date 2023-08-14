@@ -16,11 +16,32 @@
 							<input type="hidden" name="id" id="pdid" value="{{ $product->id }}" />
 							@csrf
 
+
+								@php
+		
+									$payment = '<img src="'.url('img/payments', auth()->user()->dark_mode == 'off' ? $paypal_payment->logo : 'paypal-white.png').'" width="70"/> <small class="w-100 d-block">'.trans('general.redirected_to_paypal_website').'</small>';
+								@endphp
+
+
+
 							<div class="custom-control custom-radio mb-3">
-								<input name="payment_gateway_buy" @if (Helper::userWallet('balance') == 0) disabled @else checked @endif value="wallet" id="buy_radio0" class="custom-control-input" type="radio">
-								<label class="custom-control-label" for="buy_radio0">
+								<input name="paypal_payment_gateway_buy" @if (Helper::userWallet('balance') == 0) disabled @endif value="paypal" id="buy_paypal_radio0" class="custom-control-input" type="radio">
+	
+								<label class="custom-control-label" for="buy_paypal_radio0">
 									<span>
 										<strong>
+										<span><strong>{!! $payment !!}</strong></span>
+									</strong>
+									</span>
+								</label>
+							</div>
+
+
+							<div class="custom-control custom-radio mb-3">
+								<input name="paypal_payment_gateway_buy" @if (Helper::userWallet('balance') == 0) disabled @endif value="wallet" id="buy_radio0" class="custom-control-input" type="radio">
+								<label class="custom-control-label" for="buy_radio0">
+									<span>
+									<strong>
 										<i class="fas fa-wallet mr-1 icon-sm-radio"></i> {{ __('general.wallet') }}
 										<span class="w-100 d-block font-weight-light">
 											{{ __('general.available_balance') }}: <span class="font-weight-bold mr-1 balanceWallet">{{Helper::userWallet()}}</span>
@@ -28,8 +49,7 @@
 											@if (Helper::userWallet('balance') != 0 && $settings->wallet_format <> 'real_money')
 												<i class="bi bi-info-circle text-muted" data-toggle="tooltip" data-placement="top" title="{{Helper::equivalentMoney($settings->wallet_format)}}"></i>
 											@endif
-
-										
+											
 											<a href="{{ url('my/wallet') }}" class="link-border">{{ __('general.recharge') }}</a>
 									
 										</span>
@@ -149,7 +169,7 @@
 								      </div>
 								      <div class="col-auto">
 								        <small class="subtotal font-weight-bold">
-								        {{Helper::amountFormatDecimal($product->price)}}
+								         {{Helper::amountFormatDecimal($product->price)}} 
 								        </small>
 								      </div>
 								    </div>

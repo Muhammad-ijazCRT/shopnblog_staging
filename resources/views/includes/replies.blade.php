@@ -21,7 +21,7 @@
       @if ($reply->user()->verified_id == 'yes')
         <small class="verified">
   						<i class="bi bi-patch-check-fill"></i>
-  					</small>
+  			</small>
       @endif
 
     </h6>
